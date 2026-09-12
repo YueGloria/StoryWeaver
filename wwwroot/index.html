@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f1726">
+  <meta name="description" content="本地运行的文游剧情分支、数值状态与通路编辑器">
+  <title>剧情脉络</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%235b74e8'/%3E%3Cpath d='M16 20h17a10 10 0 0 1 10 10v14M33 20l-7-7m7 7-7 7M43 44l-7-7m7 7-7 7' fill='none' stroke='white' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand" aria-label="剧情脉络">
+        <span class="brand-mark" aria-hidden="true">脉</span>
+        <div class="brand-copy">
+          <h1>剧情脉络</h1>
+          <span id="save-status">正在读取缓存…</span>
+        </div>
+      </div>
+
+      <label class="project-name">
+        <span class="sr-only">项目名称</span>
+        <input id="project-title" value="" maxlength="80" autocomplete="off" aria-label="项目名称">
+      </label>
+
+      <div class="top-actions">
+        <div class="search-wrap">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input id="search-input" type="search" placeholder="查找节点或备注" autocomplete="off" aria-label="查找节点或备注">
+          <div id="search-results" class="search-results" hidden></div>
+        </div>
+        <button type="button" class="toolbar-button" id="new-project">新建</button>
+        <button type="button" class="toolbar-button" id="import-project">导入</button>
+        <button type="button" class="toolbar-button" id="save-project">保存</button>
+        <button type="button" class="primary-button" id="export-project">导出</button>
+      </div>
+    </header>
+
+    <nav class="tool-strip" aria-label="画布工具">
+      <div class="tool-group">
+        <button type="button" class="tool-button" id="merge-tool" aria-pressed="false"><span aria-hidden="true">⋔</span> 收束</button>
+        <button type="button" class="tool-button" id="connect-tool" aria-pressed="false"><span aria-hidden="true">↗</span> 连线</button>
+        <button type="button" class="tool-button" id="insert-value-node" disabled title="请先选中一条分支线"><span aria-hidden="true">◇</span> 插入数值节点</button>
+        <span class="tool-divider" aria-hidden="true"></span>
+        <button type="button" class="tool-button" id="fit-view"><span aria-hidden="true">⊡</span> 适应画布</button>
+      </div>
+      <div class="selection-summary" id="selection-summary">已选择元节点</div>
+    </nav>
+
+    <section class="workspace">
+      <div id="canvas" class="canvas" aria-label="剧情图画布">
+        <div id="world" class="world">
+          <svg id="edge-layer" class="edges" aria-label="分支线"></svg>
+          <div id="node-layer" class="node-layer"></div>
+        </div>
+        <div id="empty-state" class="empty-state" hidden>
+          <strong>从元节点开始建立剧情</strong>
+          <span>点击元节点右侧的加号创建第一个子节点</span>
+        </div>
+        <div class="canvas-hint">拖拽空白处移动 · 滚轮缩放 · 双击节点名称快速编辑</div>
+        <div class="zoom-controls" aria-label="缩放控制">
+          <button type="button" id="zoom-out" aria-label="缩小">−</button>
+          <button type="button" id="zoom-label" class="zoom-label" title="点击恢复 100%">100%</button>
+          <button type="button" id="zoom-in" aria-label="放大">＋</button>
+        </div>
+      </div>
+      <aside id="sidebar" class="sidebar" aria-live="polite"></aside>
+    </section>
+
+    <button type="button" class="route-check" id="route-check"><span aria-hidden="true">✓</span> 检查通路</button>
+
+    <section id="merge-dock" class="merge-dock" hidden aria-label="收束工具">
+      <div>
+        <strong>收束模式</strong>
+        <span id="merge-message">请选择至少两个要合拢的节点</span>
+      </div>
+      <div class="merge-actions">
+        <button type="button" class="toolbar-button" id="merge-existing" disabled>收束到已有节点</button>
+        <button type="button" class="primary-button" id="merge-create" disabled>新建收束节点</button>
+        <button type="button" class="icon-button" id="merge-cancel" aria-label="退出收束模式">×</button>
+      </div>
+    </section>
+
+    <section id="connect-dock" class="connect-dock" hidden aria-label="连线工具">
+      <div>
+        <strong>连线模式</strong>
+        <span id="connect-message" aria-live="polite">先点击起点剧情节点，再点击终点剧情节点</span>
+      </div>
+      <div class="connect-actions">
+        <button type="button" class="toolbar-button" id="connect-reset" disabled>重选起点</button>
+        <button type="button" class="icon-button" id="connect-cancel" aria-label="退出连线模式">×</button>
+      </div>
+    </section>
+  </main>
+
+  <input type="file" id="import-file" accept="application/json,.json,.storymap" hidden>
+  <div id="dialog-backdrop" class="dialog-backdrop" hidden>
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div class="dialog-icon" id="dialog-icon" aria-hidden="true">!</div>
+      <div class="dialog-content">
+        <h2 id="dialog-title">请确认</h2>
+        <p id="dialog-message"></p>
+        <div id="dialog-details" class="dialog-details" hidden></div>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="toolbar-button" id="dialog-cancel">取消</button>
+        <button type="button" class="danger-button" id="dialog-confirm">确认</button>
+      </div>
+    </section>
+  </div>
+  <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <script src="/expression.js"></script>
+  <script src="/model.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
