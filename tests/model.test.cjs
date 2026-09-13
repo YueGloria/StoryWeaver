@@ -33,6 +33,12 @@ function effect(variableId, operator, operandValue) {
   return { id: M.uid('effect'), variableId, operator, operandType: 'number', operandValue, operandVariableId: '' };
 }
 
+function valueOption(name, effects = []) {
+  const option = M.newValueOption(name);
+  option.effects = effects;
+  return option;
+}
+
 {
   const p = makeProject();
   p.nodes.push(node('b', 'B'));
@@ -113,6 +119,132 @@ function effect(variableId, operator, operandValue) {
   M.removeVariableReferences(p, 'age', '年龄');
   assert.equal(p.nodes.find(item => item.id === 'value-node').effects.length, 0);
   assert.equal(p.branchLines.find(item => item.id === 'to-target').effects.length, 0);
+}
+
+{
+  const p = makeProject();
+  const choice = node('choice', '休息方式', 'value');
+  choice.valueOptions = [
+    valueOption('睡一觉', [effect('age', 'add', 5), effect('affection', 'add', 2)]),
+    valueOption('继续赶路', [effect('age', 'subtract', 10)])
+  ];
+  p.nodes.push(choice, node('after-choice', '共同后续'));
+  p.branchLines.push(line('to-choice', p.rootId, 'choice'), line('choice-next', 'choice', 'after-choice'));
+  const calculation = M.calculate(p);
+  const atChoice = calculation.nodeResults.get('choice');
+  const afterChoice = calculation.nodeResults.get('after-choice');
+  assert.deepEqual([atChoice.values.age.min, atChoice.values.age.max], [20, 35]);
+  assert.deepEqual([afterChoice.values.age.min, afterChoice.values.age.max], [20, 35]);
+  assert.deepEqual([afterChoice.values.affection.min, afterChoice.values.affection.max], [0, 2]);
+  assert.equal(atChoice.pathCount, 2);
+  assert.equal(afterChoice.pathCount, 2);
+}
+
+{
+  const p = makeProject();
+  const choice = node('choice', '两种结果', 'value');
+  choice.valueOptions = [
+    valueOption('满足门槛', [effect('age', 'add', 5)]),
+    valueOption('不满足门槛', [effect('age', 'subtract', 10)])
+  ];
+  p.nodes.push(choice, node('locked-target', '锁后节点'));
+  p.branchLines.push(line('to-choice', p.rootId, 'choice'));
+  const lock = M.newLock('age');
+  lock.enabled = true;
+  lock.builder.children[0].comparator = '>=';
+  lock.builder.children[0].rightValue = 30;
+  p.branchLines.push(line('choice-lock', 'choice', 'locked-target', [], lock));
+  const calculation = M.calculate(p);
+  const target = calculation.nodeResults.get('locked-target');
+  assert.deepEqual([target.values.age.min, target.values.age.max], [35, 35]);
+  assert.equal(calculation.edgeStats.get('choice-lock').evaluated, 2);
+  assert.equal(calculation.edgeStats.get('choice-lock').passed, 1);
+  assert.equal(calculation.edgeStats.get('choice-lock').blocked, 1);
+}
+
+{
+  const p = makeProject();
+  const choice = node('empty-choice', '尚未配置', 'value');
+  choice.valueOptions = [];
+  p.nodes.push(choice, node('after-empty', '空选项后续'));
+  p.branchLines.push(line('to-empty', p.rootId, 'empty-choice'), line('empty-next', 'empty-choice', 'after-empty'));
+  const calculation = M.calculate(p);
+  assert.equal(calculation.nodeResults.get('empty-choice').values.age.min, 30);
+  assert.equal(calculation.nodeResults.get('after-empty').values.age.max, 30);
+  assert.equal(calculation.nodeResults.get('after-empty').pathCount, 1);
+}
+
+{
+  const p = makeProject();
+  const choice = node('same-choice', '同值选项', 'value');
+  choice.valueOptions = [valueOption('选项甲'), valueOption('选项乙')];
+  p.nodes.push(choice);
+  p.branchLines.push(line('to-same', p.rootId, 'same-choice'));
+  const result = M.calculate(p).nodeResults.get('same-choice');
+  assert.equal(result.possibleStateCount, 1);
+  assert.equal(result.pathCount, 2);
+  assert.equal(result.values.age.min, 30);
+}
+
+{
+  const p = makeProject();
+  const choice = node('partly-invalid', '部分无效', 'value');
+  choice.valueOptions = [
+    valueOption('有效选项', [effect('age', 'add', 3)]),
+    valueOption('除零选项', [effect('age', 'divide', 0)])
+  ];
+  p.nodes.push(choice);
+  p.branchLines.push(line('to-partly-invalid', p.rootId, 'partly-invalid'));
+  const calculation = M.calculate(p);
+  assert.equal(calculation.nodeResults.get('partly-invalid').reachable, true);
+  assert.equal(calculation.nodeResults.get('partly-invalid').values.age.min, 33);
+  assert.ok(calculation.errors.some(message => message.includes('除零选项') && message.includes('除以 0')));
+}
+
+{
+  const p = makeProject();
+  const legacy = node('legacy-value', '旧数值节点', 'value', [effect('age', 'add', 4)]);
+  p.nodes.push(legacy);
+  p.branchLines.push(line('to-legacy', p.rootId, 'legacy-value'));
+  const normalized = M.normalizeProject(p);
+  const migrated = normalized.nodes.find(item => item.id === 'legacy-value');
+  assert.equal(normalized.formatVersion, 2);
+  assert.equal(migrated.effects.length, 0);
+  assert.equal(migrated.valueOptions.length, 1);
+  assert.equal(migrated.valueOptions[0].name, '原有数值调整');
+  assert.equal(M.calculate(normalized).nodeResults.get('legacy-value').values.age.min, 34);
+}
+
+{
+  const p = makeProject();
+  const choice = node('reference-choice', '引用测试', 'value');
+  choice.valueOptions = [
+    valueOption('增加年龄', [effect('age', 'add', 1)]),
+    valueOption('年龄乘好感度', [{ ...effect('age', 'multiply', 0), operandType: 'variable', operandVariableId: 'affection' }])
+  ];
+  p.nodes.push(choice);
+  p.branchLines.push(line('to-reference', p.rootId, 'reference-choice'));
+  const references = M.countReferences(p, 'age');
+  assert.equal(references.nodeCount, 1);
+  M.removeVariableReferences(p, 'age', '年龄');
+  assert.equal(choice.valueOptions[0].effects.length, 0);
+  assert.equal(choice.valueOptions[1].effects.length, 0);
+}
+
+{
+  const p = makeProject();
+  const choice = node('export-choice', '导出选项', 'value');
+  choice.valueOptions = [valueOption('买药', [effect('affection', 'add', 5)]), valueOption('离开')];
+  p.nodes.push(choice);
+  p.branchLines.push(line('to-export-choice', p.rootId, 'export-choice'));
+  const exported = M.buildAiExport(p);
+  const exportedChoice = exported.nodes.find(item => item.id === 'export-choice');
+  assert.equal(exported.formatVersion, 2);
+  assert.equal(exportedChoice.valueOptionsReadable[0].name, '买药');
+  assert.equal(exportedChoice.valueOptionsReadable[0].numericChanges[0], '好感度 + 5');
+  assert.match(exported.aiReadingGuide.valueNodeChoices, /互斥/);
+  const imported = M.normalizeProject(exported);
+  assert.equal(imported.nodes.find(item => item.id === 'export-choice').valueOptions.length, 2);
 }
 
 {
