@@ -140,7 +140,14 @@
 
   function nodeValueMarkup(node) {
     const result = calculation.nodeResults.get(node.id);
-    if (!result?.reachable) return '<span class="node-value-chip unreachable">数值锁阻断</span>';
+    if (!result?.reachable) return '<span class="node-value-chip unreachable">当前不可达</span>';
+    if (node.kind === 'value') {
+      const options = Model.getValueOptions(node);
+      if (!options.length) return '<span class="node-value-chip value-option-chip">未设置选项 · 数值不变</span>';
+      const firstName = options[0]?.name || '未命名选项';
+      const preview = options.length > 1 ? `${firstName} 等` : firstName;
+      return `<span class="node-value-chip value-option-count">${options.length} 个选项</span><span class="node-value-chip value-option-chip" title="${escapeHtml(options.map(option => option.name || '未命名选项').join('、'))}">${escapeHtml(preview)}</span>`;
+    }
     if (!project.numberDefinitions.length) return '<span class="node-value-chip">尚未定义数值</span>';
     const shown = project.numberDefinitions.slice(0, 2).map(definition =>
       `<span class="node-value-chip">${escapeHtml(definition.name)} ${escapeHtml(Model.formatRange(result.values[definition.id]))}</span>`).join('');
@@ -269,6 +276,29 @@
     </div>`).join('')}</div>`;
   }
 
+  function valueOptionsMarkup(node) {
+    const options = Model.getValueOptions(node);
+    if (!options.length) {
+      return '<div class="empty-inline">还没有选项。未设置选项时，这个节点会按“数值不变”继续到共同后续路径。</div>';
+    }
+    return `<div class="value-option-list">${options.map((option, index) => `<article class="value-option-card" data-value-option-id="${escapeHtml(option.id)}">
+      <div class="value-option-head">
+        <span class="value-option-index">选项 ${index + 1}</span>
+        <div class="value-option-actions">
+          <button type="button" class="option-action" data-value-option-action="move-up"${index === 0 ? ' disabled' : ''} title="上移选项" aria-label="上移选项">↑</button>
+          <button type="button" class="option-action" data-value-option-action="move-down"${index === options.length - 1 ? ' disabled' : ''} title="下移选项" aria-label="下移选项">↓</button>
+          <button type="button" class="option-action option-copy" data-value-option-action="duplicate" title="复制选项">复制</button>
+          <button type="button" class="remove-row" data-value-option-action="remove" title="删除选项" aria-label="删除选项">×</button>
+        </div>
+      </div>
+      <label class="field value-option-name"><span>选项名称</span><input class="compact-input" data-value-option-field="name" maxlength="120" value="${escapeHtml(option.name)}" placeholder="例如：买药"></label>
+      <div class="value-option-effects">
+        <div class="value-option-effect-title"><span>选择后发生的数值变化</span><small>按下方排列顺序依次执行</small></div>
+        ${effectsMarkup(option.effects || [], `选项“${option.name || `选项 ${index + 1}`}”`)}
+      </div>
+    </article>`).join('')}</div>`;
+  }
+
   function renderNodeSidebar(node) {
     const isRoot = node.kind === 'root';
     const isValue = node.kind === 'value';
@@ -285,15 +315,15 @@
         <div class="section-title"><div><h3>数值定义</h3><p>数值类只能在元节点添加、修改或删除</p></div><button type="button" class="mini-button accent" data-definition-action="add">＋ 添加</button></div>
         ${definitionsMarkup()}
       </section>` : ''}
-      ${isValue ? `<section class="section" data-effect-owner="node">
-        <div class="section-title"><div><h3>节点数值变化</h3><p>进入这个节点后自动执行，不会新增剧情分支</p></div></div>
-        ${effectsMarkup(node.effects, '这个数值节点')}
+      ${isValue ? `<section class="section value-options-section">
+        <div class="section-title"><div><h3>数值选项</h3><p>每次经过只选择一组，所有组仍通向相同的后续剧情</p></div><button type="button" class="mini-button accent" data-value-option-action="add">＋ 添加选项</button></div>
+        ${valueOptionsMarkup(node)}
       </section>` : ''}
       <section class="section">
-        <div class="section-title"><div><h3>${isRoot ? '初始数值' : '到达后的数值'}</h3><p>${isRoot ? '所有路径从这些数值开始' : '根据全部有效路径实时计算'}</p></div></div>
+        <div class="section-title"><div><h3>${isRoot ? '初始数值' : isValue ? '各选项执行后的数值' : '到达后的数值'}</h3><p>${isRoot ? '所有路径从这些数值开始' : isValue ? '综合所有可选结果实时计算上下限' : '根据全部有效路径实时计算'}</p></div></div>
         ${valueListMarkup(node.id)}
       </section>
-      ${isValue ? '<div class="sidebar-note">数值节点适合记录“不改变剧情、只调整状态”的事件。它通常由“在分支线上插入数值节点”创建。</div>' : ''}
+      ${isValue ? '<div class="sidebar-note">每个选项组都是一次互斥选择：只执行被选中组里的数值变化，但不会为它新增剧情节点或分支线。之后仍沿数值节点已有的共同出口继续。</div>' : ''}
     </div>`;
     bindNodeSidebar(node);
   }
@@ -444,6 +474,70 @@
     }));
   }
 
+  function nextValueOptionName(node) {
+    const names = new Set(Model.getValueOptions(node).map(option => String(option.name || '').trim()));
+    let index = Math.max(1, Model.getValueOptions(node).length + 1);
+    while (names.has(`选项 ${index}`)) index += 1;
+    return `选项 ${index}`;
+  }
+
+  function bindValueOptionEditor(node) {
+    node.valueOptions = Model.getValueOptions(node);
+    dom.sidebar.querySelector('[data-value-option-action="add"]')?.addEventListener('click', () => {
+      const option = Model.newValueOption(nextValueOptionName(node));
+      node.valueOptions.push(option);
+      markDirty(); refresh();
+      requestAnimationFrame(() => dom.sidebar.querySelector(`[data-value-option-id="${CSS.escape(option.id)}"] [data-value-option-field="name"]`)?.select());
+    });
+
+    dom.sidebar.querySelectorAll('[data-value-option-id]').forEach(card => {
+      const option = node.valueOptions.find(item => item.id === card.dataset.valueOptionId);
+      if (!option) return;
+      card.querySelector('[data-value-option-field="name"]')?.addEventListener('input', event => {
+        option.name = event.target.value;
+        markDirty(); renderGraph();
+      });
+      card.querySelector('[data-value-option-field="name"]')?.addEventListener('change', event => {
+        option.name = event.target.value.trim() || '未命名选项';
+        markDirty(); refresh();
+      });
+      card.querySelectorAll('[data-value-option-action]').forEach(button => button.addEventListener('click', event => {
+        const action = event.currentTarget.dataset.valueOptionAction;
+        const index = node.valueOptions.findIndex(item => item.id === option.id);
+        if (index < 0) return;
+        if (action === 'move-up' && index > 0) {
+          [node.valueOptions[index - 1], node.valueOptions[index]] = [node.valueOptions[index], node.valueOptions[index - 1]];
+          markDirty(); refresh();
+        }
+        if (action === 'move-down' && index < node.valueOptions.length - 1) {
+          [node.valueOptions[index + 1], node.valueOptions[index]] = [node.valueOptions[index], node.valueOptions[index + 1]];
+          markDirty(); refresh();
+        }
+        if (action === 'duplicate') {
+          const copy = Model.newValueOption(`${option.name || `选项 ${index + 1}`}（副本）`);
+          copy.effects = (option.effects || []).map(effect => ({ ...Model.clone(effect), id: Model.uid('effect') }));
+          node.valueOptions.splice(index + 1, 0, copy);
+          markDirty(); refresh();
+          requestAnimationFrame(() => dom.sidebar.querySelector(`[data-value-option-id="${CSS.escape(copy.id)}"] [data-value-option-field="name"]`)?.select());
+        }
+        if (action === 'remove') {
+          const remove = () => {
+            node.valueOptions = node.valueOptions.filter(item => item.id !== option.id);
+            markDirty(); refresh();
+          };
+          if (!(option.effects || []).length) remove();
+          else showDialog({
+            title: `删除选项“${option.name || `选项 ${index + 1}`}”`,
+            message: `这个选项包含 ${(option.effects || []).length} 条数值变化，删除后无法从页面中撤销。`,
+            confirmLabel: '删除选项', onConfirm: remove
+          });
+        }
+      }));
+      const effectsContainer = card.querySelector('.value-option-effects');
+      if (effectsContainer) bindEffectEditor(effectsContainer, option.effects);
+    });
+  }
+
   function bindNodeSidebar(node) {
     const titleInput = dom.sidebar.querySelector('[data-node-field="title"]');
     const notesInput = dom.sidebar.querySelector('[data-node-field="notes"]');
@@ -501,10 +595,7 @@
       });
     }));
 
-    if (node.kind === 'value') {
-      const effectsContainer = dom.sidebar.querySelector('[data-effect-owner="node"]');
-      if (effectsContainer) bindEffectEditor(effectsContainer, node.effects);
-    }
+    if (node.kind === 'value') bindValueOptionEditor(node);
   }
 
   function bindLockEditor(line) {
@@ -592,7 +683,10 @@
     const line = Model.getLine(project, lineId);
     if (!line) return;
     const previousTarget = line.targetId;
-    const node = { id: Model.uid('node'), kind: 'value', title: '数值调整', notes: '', effects: [], createdAt: Model.nowIso(), sortIndex: project.nodes.length };
+    const node = {
+      id: Model.uid('node'), kind: 'value', title: '数值选择', notes: '', effects: [],
+      valueOptions: [Model.newValueOption('选项 1')], createdAt: Model.nowIso(), sortIndex: project.nodes.length
+    };
     project.nodes.push(node);
     line.targetId = node.id;
     project.branchLines.push({ id: Model.uid('line'), sourceId: node.id, targetId: previousTarget, label: '', effects: [], lock: Model.newLock(defaultVariableId()), createdAt: Model.nowIso() });
@@ -602,8 +696,14 @@
   }
 
   function isEditedNode(node) {
-    const defaultTitles = new Set(['新节点', '收束节点', '数值调整']);
-    return Boolean(node.notes.trim() || node.effects.length || (!defaultTitles.has(node.title.trim()) && node.kind !== 'root'));
+    const defaultTitles = new Set(['新节点', '收束节点', '数值调整', '数值选择']);
+    const options = Model.getValueOptions(node);
+    const hasEditedOptions = node.kind === 'value' && (
+      options.length !== 1 ||
+      options[0]?.name?.trim() !== '选项 1' ||
+      Boolean(options[0]?.effects?.length)
+    );
+    return Boolean(node.notes.trim() || (node.effects || []).length || hasEditedOptions || (!defaultTitles.has(node.title.trim()) && node.kind !== 'root'));
   }
 
   function isEditedLine(line) { return Boolean(line.label.trim() || line.effects.length || line.lock?.enabled); }
@@ -761,10 +861,14 @@
   function showSearchResults() {
     const query = dom.searchInput.value.trim().toLocaleLowerCase('zh-CN');
     if (!query) { dom.searchResults.hidden = true; searchActiveIndex = -1; return; }
-    const matches = project.nodes.filter(node => `${node.title}\n${node.notes}`.toLocaleLowerCase('zh-CN').includes(query)).slice(0, 30);
+    const matches = project.nodes.filter(node => {
+      const optionNames = Model.getValueOptions(node).map(option => option.name).join('\n');
+      return `${node.title}\n${node.notes}\n${optionNames}`.toLocaleLowerCase('zh-CN').includes(query);
+    }).slice(0, 30);
     searchActiveIndex = matches.length ? Math.min(Math.max(searchActiveIndex, 0), matches.length - 1) : -1;
     dom.searchResults.innerHTML = matches.length ? matches.map((node, index) => {
-      const excerpt = node.notes.trim().replace(/\s+/g, ' ') || (node.kind === 'root' ? '元节点' : node.kind === 'value' ? '数值节点' : '剧情节点');
+      const optionSummary = Model.getValueOptions(node).map(option => option.name || '未命名选项').join('、');
+      const excerpt = node.notes.trim().replace(/\s+/g, ' ') || optionSummary || (node.kind === 'root' ? '元节点' : node.kind === 'value' ? '数值节点' : '剧情节点');
       return `<button type="button" class="search-result${index === searchActiveIndex ? ' active' : ''}" data-search-node="${escapeHtml(node.id)}"><strong>${escapeHtml(node.title || '未命名节点')}</strong><span>${escapeHtml(capText(excerpt, 46))}</span></button>`;
     }).join('') : '<div class="search-empty">没有找到匹配的节点或备注</div>';
     dom.searchResults.hidden = false;
@@ -795,7 +899,10 @@
         const stats = calculation.edgeStats.get(line.id);
         return sourceResult?.reachable && stats?.evaluated > 0 && stats.passed === 0 && line.lock?.enabled;
       });
-      const reason = blockers.length
+      const nodeRuleErrors = calculation.errors.filter(message => message.startsWith(`数值节点“${node.title || '未命名数值节点'}”`));
+      const reason = nodeRuleErrors.length
+        ? `该数值节点的选项没有产生有效状态：${nodeRuleErrors.join('；')}`
+        : blockers.length
         ? blockers.map(line => `分支线“${line.label || '未命名分支线'}”：${Model.lockToText(line, project)}`).join('；')
         : '所有前置路径已在更早的数值锁处中断';
       return `<div class="report-item"><strong>${escapeHtml(node.title || '未命名节点')}</strong><span>${escapeHtml(reason)}</span></div>`;

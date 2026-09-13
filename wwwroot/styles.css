@@ -85,7 +85,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .story-node.connect-ineligible { opacity: .55; cursor: not-allowed; }
 .story-node.unreachable { border-color: rgba(241,125,134,.55); background: linear-gradient(145deg,#2c1b28,#181722); }
 .root-node { background: linear-gradient(145deg,#293861,#18223d); }
-.value-node { width: 176px; min-height: 82px; padding: 12px 15px; border-style: dashed; background: linear-gradient(145deg,#17302d,#11221f); }
+.value-node { width: 204px; min-height: 100px; padding: 12px 15px; border-style: dashed; background: linear-gradient(145deg,#17302d,#11221f); }
 .node-kicker { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; color: #9eaff8; text-transform: uppercase; font-size: 12px; letter-spacing: .07em; }
 .value-node .node-kicker { color: #7eddb2; }
 .node-kicker .route-count { color: var(--subtle); font-size: 11px; letter-spacing: 0; }
@@ -93,6 +93,9 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .node-values { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 11px; color: var(--muted); font-size: 11px; }
 .node-value-chip { max-width: 100%; padding: 3px 6px; overflow: hidden; border: 1px solid #2c3a52; border-radius: 6px; background: rgba(8,13,22,.35); text-overflow: ellipsis; white-space: nowrap; }
 .node-value-chip.unreachable { border-color: rgba(241,125,134,.35); color: #f3a1a8; }
+.value-node .node-values { flex-wrap: nowrap; }
+.value-node .value-option-count { flex: 0 0 auto; border-color: rgba(87,212,154,.38); color: #8be2ba; }
+.value-node .value-option-chip { min-width: 0; }
 .node-add { position: absolute; right: -14px; top: 50%; translate: 0 -50%; width: 29px; height: 29px; display: grid; place-items: center; padding: 0; border: 1px solid #7890ff; border-radius: 50%; background: #17213a; color: #c6ceff; cursor: pointer; opacity: 0; transition: opacity .15s,transform .15s,background .15s; }
 .story-node:hover .node-add, .story-node.selected .node-add { opacity: 1; }
 .node-add:hover { transform: scale(1.09); background: #2a3967; }
@@ -146,6 +149,22 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .effect-grid { display: grid; grid-template-columns: minmax(90px,1.25fr) minmax(90px,.9fr) 32px; gap: 7px; align-items: center; }
 .effect-operand { display: grid; grid-template-columns: 94px minmax(0,1fr); gap: 7px; margin-top: 7px; }
 .effect-preview { margin-top: 7px; color: var(--muted); font: 12px Consolas,monospace; }
+
+.value-option-list { display: grid; gap: 14px; margin-top: 12px; }
+.value-option-card { min-width: 0; padding: 12px; border: 1px solid #315047; border-radius: 12px; background: linear-gradient(145deg,rgba(22,47,43,.78),rgba(15,27,34,.94)); }
+.value-option-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.value-option-index { color: #89dfb8; font-size: 12px; font-weight: 700; letter-spacing: .04em; }
+.value-option-actions { display: flex; align-items: center; gap: 4px; }
+.option-action { min-width: 28px; height: 28px; padding: 0 7px; border: 1px solid #344c4b; border-radius: 7px; background: rgba(18,35,39,.9); color: #a9c9c1; cursor: pointer; font-size: 12px; }
+.option-action:hover:not(:disabled) { border-color: #4f756c; background: #1d423a; color: #d8f5e9; }
+.option-action.option-copy { padding-inline: 8px; }
+.value-option-name { margin-top: 10px; }
+.value-option-name > span { color: var(--muted); font-size: 12px; }
+.value-option-effects { min-width: 0; margin-top: 13px; padding-top: 12px; border-top: 1px solid rgba(86,126,115,.35); }
+.value-option-effect-title { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 9px; color: #c8d8d4; font-size: 12px; }
+.value-option-effect-title small { color: var(--subtle); font-size: 11px; }
+.value-option-card .effect-row { border-color: #2d4744; background: rgba(11,24,29,.72); }
+.value-option-card .empty-inline { border-color: #36534d; background: rgba(9,20,24,.34); }
 
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; border: 1px solid #2c3950; border-radius: 10px; background: #131c2b; }
 .switch-copy strong { display: block; font-size: 14px; }

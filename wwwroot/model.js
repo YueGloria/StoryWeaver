@@ -2,7 +2,7 @@
   'use strict';
 
   const Expr = window.StoryExpression;
-  const SCHEMA = 'storyweaver.project.v1';
+  const SCHEMA = 'storyweaver.project.v2';
   const MAX_UNIQUE_STATES = 5000;
 
   const uid = prefix => `${prefix}-${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
@@ -12,6 +12,10 @@
 
   function newEffect(variableId = '') {
     return { id: uid('effect'), variableId, operator: 'add', operandType: 'number', operandValue: 0, operandVariableId: '' };
+  }
+
+  function newValueOption(name = '选项 1') {
+    return { id: uid('option'), name: String(name || '未命名选项'), effects: [] };
   }
 
   function newCondition(variableId = '') {
@@ -33,7 +37,7 @@
     const rootId = uid('node');
     return {
       schema: SCHEMA,
-      formatVersion: 1,
+      formatVersion: 2,
       meta: { title: '未命名文游', createdAt: nowIso(), updatedAt: nowIso() },
       rootId,
       numberDefinitions: [],
@@ -51,6 +55,15 @@
       operandType: raw?.operandType === 'variable' ? 'variable' : 'number',
       operandValue: finiteNumber(raw?.operandValue),
       operandVariableId: definitionIds.has(raw?.operandVariableId) ? raw.operandVariableId : ''
+    };
+  }
+
+  function normalizeValueOption(raw, index, definitionIds) {
+    const fallbackName = `选项 ${index + 1}`;
+    return {
+      id: String(raw?.id || uid('option')),
+      name: String(raw?.name ?? fallbackName).trim() || fallbackName,
+      effects: Array.isArray(raw?.effects) ? raw.effects.map(effect => normalizeEffect(effect, definitionIds)) : []
     };
   }
 
@@ -92,15 +105,30 @@
     });
     const definitionIds = new Set(definitions.map(item => item.id));
 
-    const nodes = raw.nodes.map((item, index) => ({
-      id: String(item.id || uid('node')),
-      kind: item.kind === 'value' ? 'value' : item.kind === 'root' ? 'root' : 'story',
-      title: String(item.title ?? (item.kind === 'value' ? '数值调整' : '新节点')),
-      notes: String(item.notes ?? ''),
-      effects: Array.isArray(item.effects) ? item.effects.map(effect => normalizeEffect(effect, definitionIds)) : [],
-      createdAt: String(item.createdAt || nowIso()),
-      sortIndex: finiteNumber(item.sortIndex, index)
-    }));
+    const nodes = raw.nodes.map((item, index) => {
+      const kind = item.kind === 'value' ? 'value' : item.kind === 'root' ? 'root' : 'story';
+      const legacyEffects = Array.isArray(item.effects) ? item.effects.map(effect => normalizeEffect(effect, definitionIds)) : [];
+      let valueOptions = [];
+      if (kind === 'value') {
+        if (Array.isArray(item.valueOptions)) {
+          valueOptions = item.valueOptions.map((option, optionIndex) => normalizeValueOption(option, optionIndex, definitionIds));
+        } else {
+          const migrated = newValueOption(legacyEffects.length ? '原有数值调整' : '选项 1');
+          migrated.effects = legacyEffects;
+          valueOptions = [migrated];
+        }
+      }
+      return {
+        id: String(item.id || uid('node')),
+        kind,
+        title: String(item.title ?? (kind === 'value' ? '数值选择' : '新节点')),
+        notes: String(item.notes ?? ''),
+        effects: kind === 'value' ? [] : legacyEffects,
+        valueOptions,
+        createdAt: String(item.createdAt || nowIso()),
+        sortIndex: finiteNumber(item.sortIndex, index)
+      };
+    });
     if (!nodes.length) throw new Error('项目至少需要一个元节点。');
     const nodeIds = new Set(nodes.map(item => item.id));
     let rootId = nodeIds.has(raw.rootId) ? String(raw.rootId) : nodes.find(item => item.kind === 'root')?.id || nodes[0].id;
@@ -124,7 +152,7 @@
 
     const normalized = {
       schema: SCHEMA,
-      formatVersion: 1,
+      formatVersion: 2,
       meta: {
         title: String(raw.meta?.title || '未命名文游'),
         createdAt: String(raw.meta?.createdAt || nowIso()),
@@ -246,7 +274,12 @@
   }
 
   function applyEffects(state, effects) {
-    const next = { values: { ...state.values }, ways: state.ways, path: [...state.path] };
+    const next = {
+      values: { ...state.values },
+      ways: state.ways,
+      path: [...(state.path || [])],
+      choices: [...(state.choices || [])]
+    };
     for (const effect of effects || []) {
       if (!effect.variableId || next.values[effect.variableId] === undefined) throw new Error('数值变化的目标数值类不存在。');
       const current = next.values[effect.variableId];
@@ -268,6 +301,15 @@
       next.values[effect.variableId] = value;
     }
     return next;
+  }
+
+  function getValueOptions(node) {
+    if (!node || node.kind !== 'value') return [];
+    if (Array.isArray(node.valueOptions)) return node.valueOptions;
+    if (Array.isArray(node.effects) && node.effects.length) {
+      return [{ id: `legacy-${node.id}`, name: '原有数值调整', effects: node.effects }];
+    }
+    return [];
   }
 
   function stateKey(state, definitions) {
@@ -299,7 +341,7 @@
     const errors = new Set();
     const warnings = new Set();
     const initialValues = Object.fromEntries(project.numberDefinitions.map(item => [item.id, finiteNumber(item.initialValue)]));
-    appendState(statesByNode, project.rootId, { values: initialValues, ways: 1, path: [] }, project.numberDefinitions, warnings);
+    appendState(statesByNode, project.rootId, { values: initialValues, ways: 1, path: [], choices: [] }, project.numberDefinitions, warnings);
 
     for (const nodeId of topo.order) {
       const sourceStates = statesByNode.get(nodeId) || [];
@@ -323,9 +365,23 @@
           try {
             let next = applyEffects(state, line.effects);
             next.path.push(line.id);
-            next = applyEffects(next, target?.effects || []);
             stats.passed = Math.min(Number.MAX_SAFE_INTEGER, stats.passed + state.ways);
-            appendState(statesByNode, line.targetId, next, project.numberDefinitions, warnings);
+            const options = getValueOptions(target);
+            if (target?.kind === 'value' && options.length) {
+              options.forEach((option, optionIndex) => {
+                try {
+                  const optionState = applyEffects(next, option.effects);
+                  optionState.choices.push({ nodeId: target.id, optionId: option.id, optionName: option.name || `选项 ${optionIndex + 1}` });
+                  appendState(statesByNode, line.targetId, optionState, project.numberDefinitions, warnings);
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error);
+                  errors.add(`数值节点“${target.title || '未命名数值节点'}”的选项“${option.name || `选项 ${optionIndex + 1}`}”：${message}`);
+                }
+              });
+            } else {
+              next = applyEffects(next, target?.kind === 'value' ? [] : target?.effects || []);
+              appendState(statesByNode, line.targetId, next, project.numberDefinitions, warnings);
+            }
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             if (!stats.errors.includes(message)) stats.errors.push(message);
@@ -389,8 +445,8 @@
     const worldHeight = Math.max(700, maxCount * 146 + 150);
     const maxDepth = Math.max(0, ...depths.values());
     const nodeSizes = new Map(project.nodes.map(node => [node.id, {
-      width: node.kind === 'value' ? 176 : 220,
-      height: node.kind === 'value' ? 86 : 108
+      width: node.kind === 'value' ? 204 : 220,
+      height: node.kind === 'value' ? 104 : 108
     }]));
     const columnWidths = new Map();
     project.nodes.forEach(node => {
@@ -486,7 +542,10 @@
 
   function countReferences(project, variableId) {
     const definition = getDefinition(project, variableId);
-    const nodeIds = new Set(project.nodes.filter(node => node.effects.some(effect => effectUsesVariable(effect, variableId))).map(node => node.id));
+    const nodeIds = new Set(project.nodes.filter(node => {
+      if ((node.effects || []).some(effect => effectUsesVariable(effect, variableId))) return true;
+      return getValueOptions(node).some(option => (option.effects || []).some(effect => effectUsesVariable(effect, variableId)));
+    }).map(node => node.id));
     const lineIds = new Set(project.branchLines.filter(line => {
       if (line.effects.some(effect => effectUsesVariable(effect, variableId))) return true;
       if (!line.lock?.enabled) return false;
@@ -503,7 +562,12 @@
   }
 
   function removeVariableReferences(project, variableId, variableName) {
-    project.nodes.forEach(node => { node.effects = node.effects.filter(effect => !effectUsesVariable(effect, variableId)); });
+    project.nodes.forEach(node => {
+      node.effects = (node.effects || []).filter(effect => !effectUsesVariable(effect, variableId));
+      getValueOptions(node).forEach(option => {
+        option.effects = (option.effects || []).filter(effect => !effectUsesVariable(effect, variableId));
+      });
+    });
     project.branchLines.forEach(line => {
       line.effects = line.effects.filter(effect => !effectUsesVariable(effect, variableId));
       if (line.lock.mode === 'advanced' && Expr.referencesVariable(line.lock.expression, variableName)) {
@@ -536,20 +600,29 @@
     };
     return {
       schema: SCHEMA,
-      formatVersion: 1,
-      description: '这是剧情脉络导出的文游有向剧情图。节点表示剧情或数值事件；branchLines 表示有方向的剧情转移；数值锁应针对每条实际路径的携带数值逐条判断。',
+      formatVersion: 2,
+      description: '这是剧情脉络导出的文游有向剧情图。剧情节点表示结构路径；数值节点用 valueOptions 表示互斥选项，这些选项只改变数值并共享同一组后续分支线；branchLines 表示有方向的剧情转移；数值锁应针对每条实际状态逐条判断。',
       meta: clone(project.meta),
       rootId: project.rootId,
       numberDefinitions: clone(project.numberDefinitions),
-      nodes: project.nodes.map(node => ({
-        ...clone(node),
-        computedState: {
-          reachable: calculation.nodeResults.get(node.id)?.reachable || false,
-          pathCount: calculation.nodeResults.get(node.id)?.pathCount || 0,
-          possibleValues: computedNode(node)
-        },
-        numericChangesReadable: node.effects.map(effect => effectToText(effect, project))
-      })),
+      nodes: project.nodes.map(node => {
+        const valueOptions = getValueOptions(node);
+        return {
+          ...clone(node),
+          valueOptions: node.kind === 'value' ? clone(valueOptions) : [],
+          computedState: {
+            reachable: calculation.nodeResults.get(node.id)?.reachable || false,
+            pathCount: calculation.nodeResults.get(node.id)?.pathCount || 0,
+            possibleValues: computedNode(node)
+          },
+          numericChangesReadable: (node.effects || []).map(effect => effectToText(effect, project)),
+          valueOptionsReadable: node.kind === 'value' ? valueOptions.map((option, index) => ({
+            id: option.id,
+            name: option.name || `选项 ${index + 1}`,
+            numericChanges: (option.effects || []).map(effect => effectToText(effect, project))
+          })) : []
+        };
+      }),
       branchLines: project.branchLines.map(line => ({
         ...clone(line),
         fromNodeName: getNode(project, line.sourceId)?.title || '',
@@ -571,7 +644,8 @@
       },
       aiReadingGuide: {
         direction: '每条分支线从 sourceId 指向 targetId，元节点由 rootId 指定。',
-        numericOrder: '路径先检查分支线数值锁；通过后应用分支线数值变化；进入目标节点后再应用该节点的数值变化。',
+        numericOrder: '路径先检查分支线数值锁，通过后应用分支线数值变化；若目标是数值节点，则从 valueOptions 中互斥选择一组并按顺序应用该组 effects。',
+        valueNodeChoices: '数值节点的每个 valueOptions 条目代表一个互斥选项。每次只选一项，各项会产生不同数值状态，但不创建不同剧情分支；所有结果继续使用该数值节点已有的共同出分支线。空 valueOptions 表示数值不变并直接继续。',
         convergence: '一个节点拥有多条入分支线时表示收束；computedState.possibleValues 给出全部有效路径汇聚后的理论上下限。',
         xor: '可视化条件组中的 XOR 表示其直接子条件中恰好一个成立。高级表达式中的 XOR/^ 是二元异或。'
       }
@@ -580,7 +654,7 @@
 
   window.StoryModel = {
     SCHEMA, uid, clone, nowIso, finiteNumber, createDefaultProject, normalizeProject,
-    newEffect, newCondition, newGroup, newLock, getNode, getLine, getDefinition,
+    newEffect, newValueOption, newCondition, newGroup, newLock, getNode, getLine, getDefinition, getValueOptions,
     outgoingLines, incomingLines, reachableSet, topologicalOrder, wouldCreateCycle,
     calculate, edgeLabelWidth, layoutGraph, formatNumber, formatRange, effectToText, conditionToText, lockToText,
     countReferences, removeVariableReferences, findLockItem, buildAiExport
