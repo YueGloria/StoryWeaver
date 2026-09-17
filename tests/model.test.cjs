@@ -208,7 +208,7 @@ function valueOption(name, effects = []) {
   p.branchLines.push(line('to-legacy', p.rootId, 'legacy-value'));
   const normalized = M.normalizeProject(p);
   const migrated = normalized.nodes.find(item => item.id === 'legacy-value');
-  assert.equal(normalized.formatVersion, 2);
+  assert.equal(normalized.formatVersion, 3);
   assert.equal(migrated.effects.length, 0);
   assert.equal(migrated.valueOptions.length, 1);
   assert.equal(migrated.valueOptions[0].name, '原有数值调整');
@@ -239,7 +239,7 @@ function valueOption(name, effects = []) {
   p.branchLines.push(line('to-export-choice', p.rootId, 'export-choice'));
   const exported = M.buildAiExport(p);
   const exportedChoice = exported.nodes.find(item => item.id === 'export-choice');
-  assert.equal(exported.formatVersion, 2);
+  assert.equal(exported.formatVersion, 3);
   assert.equal(exportedChoice.valueOptionsReadable[0].name, '买药');
   assert.equal(exportedChoice.valueOptionsReadable[0].numericChanges[0], '好感度 + 5');
   assert.match(exported.aiReadingGuide.valueNodeChoices, /互斥/);
@@ -262,6 +262,119 @@ function valueOption(name, effects = []) {
 
 {
   const p = makeProject();
+  const target = node('insert-target', '原终点');
+  p.nodes.push(target);
+  const originalLock = M.newLock('age');
+  originalLock.enabled = true;
+  originalLock.builder.children[0].rightValue = 20;
+  const original = line('insert-line', p.rootId, target.id, [effect('age', 'add', 5)], originalLock);
+  original.label = '保留原规则';
+  p.branchLines.push(original);
+  const inserted = M.insertNodeOnLine(p, original.id, 'story');
+  assert.equal(inserted.node.kind, 'story');
+  assert.equal(original.targetId, inserted.node.id);
+  assert.equal(original.label, '保留原规则');
+  assert.equal(original.effects.length, 1);
+  assert.equal(original.lock.enabled, true);
+  assert.equal(inserted.downstreamLine.sourceId, inserted.node.id);
+  assert.equal(inserted.downstreamLine.targetId, target.id);
+  assert.equal(inserted.downstreamLine.label, '');
+  assert.equal(inserted.downstreamLine.effects.length, 0);
+  assert.equal(M.calculate(p).nodeResults.get(target.id).values.age.min, 35);
+}
+
+{
+  const p = makeProject();
+  p.nodes.push(node('value-insert-target', '数值插入终点'));
+  p.branchLines.push(line('value-insert-line', p.rootId, 'value-insert-target'));
+  const inserted = M.insertNodeOnLine(p, 'value-insert-line', 'value');
+  assert.equal(inserted.node.kind, 'value');
+  assert.equal(inserted.node.valueOptions.length, 1);
+  assert.equal(inserted.node.valueOptions[0].name, '选项 1');
+  assert.equal(M.calculate(p).nodeResults.get('value-insert-target').values.age.min, 30);
+}
+
+{
+  const p = makeProject();
+  const convertible = node('convertible-story', '可转换剧情', 'story', [effect('age', 'add', 4)]);
+  p.nodes.push(convertible, node('convert-target', '转换后续'));
+  p.branchLines.push(line('to-convertible', p.rootId, convertible.id), line('convert-out', convertible.id, 'convert-target'));
+  const before = M.calculate(p).nodeResults.get('convert-target').values.age.min;
+  assert.equal(M.nodeConversionStatus(p, convertible.id, 'value').allowed, true);
+  M.convertNodeKind(p, convertible.id, 'value');
+  assert.equal(convertible.kind, 'value');
+  assert.equal(convertible.effects.length, 0);
+  assert.equal(convertible.valueOptions[0].name, '原有数值调整');
+  assert.equal(M.calculate(p).nodeResults.get('convert-target').values.age.min, before);
+}
+
+{
+  const p = makeProject();
+  const branching = node('branching-story', '有分支剧情');
+  p.nodes.push(branching, node('branch-a', 'A'), node('branch-b', 'B'));
+  p.branchLines.push(line('to-branching', p.rootId, branching.id), line('branch-a-line', branching.id, 'branch-a'), line('branch-b-line', branching.id, 'branch-b'));
+  const status = M.nodeConversionStatus(p, branching.id, 'value');
+  assert.equal(status.allowed, false);
+  assert.match(status.reason, /2 条后续分支线/);
+  assert.throws(() => M.convertNodeKind(p, branching.id, 'value'), /请先将剧情分支整理/);
+}
+
+{
+  const p = makeProject();
+  const emptyValue = node('empty-value-convert', '空数值节点', 'value');
+  emptyValue.valueOptions = [valueOption('选项 1')];
+  const renamedValue = node('renamed-value-convert', '已命名数值节点', 'value');
+  renamedValue.valueOptions = [valueOption('休息')];
+  const configuredValue = node('configured-value-convert', '已配置数值节点', 'value');
+  configuredValue.valueOptions = [valueOption('休息', [effect('age', 'add', 1)]), valueOption('赶路')];
+  p.nodes.push(emptyValue, renamedValue, configuredValue);
+  assert.equal(M.nodeConversionStatus(p, emptyValue.id, 'story').allowed, true);
+  M.convertNodeKind(p, emptyValue.id, 'story');
+  assert.equal(emptyValue.kind, 'story');
+  assert.deepEqual(emptyValue.valueOptions, []);
+  const renamedBlocked = M.nodeConversionStatus(p, renamedValue.id, 'story');
+  assert.equal(renamedBlocked.allowed, false);
+  assert.match(renamedBlocked.reason, /1 个选项已命名/);
+  const blocked = M.nodeConversionStatus(p, configuredValue.id, 'story');
+  assert.equal(blocked.allowed, false);
+  assert.match(blocked.reason, /2 个选项/);
+}
+
+{
+  const p = makeProject();
+  p.numberGroups = [
+    { id: 'character', name: '角色属性', collapsed: false },
+    { id: 'story-state', name: '剧情状态', collapsed: true }
+  ];
+  p.numberDefinitions[0].groupId = 'character';
+  p.numberDefinitions[1].groupId = 'missing-group';
+  const normalized = M.normalizeProject(p);
+  assert.equal(normalized.formatVersion, 3);
+  assert.equal(normalized.numberGroups.length, 2);
+  assert.equal(normalized.numberGroups[1].collapsed, true);
+  assert.equal(normalized.numberDefinitions.find(item => item.id === 'age').groupId, 'character');
+  assert.equal(normalized.numberDefinitions.find(item => item.id === 'affection').groupId, '');
+  const sections = M.numberDefinitionSections(normalized);
+  assert.deepEqual(sections.map(section => section.name), ['未分组', '角色属性']);
+  const exported = M.buildAiExport(normalized);
+  assert.equal(exported.numberDefinitionsReadable.find(item => item.id === 'age').group, '角色属性');
+  assert.equal(exported.numberDefinitionsReadable.find(item => item.id === 'affection').group, '未分组');
+  assert.match(exported.aiReadingGuide.numberGroups, /不改变任何数值逻辑/);
+}
+
+{
+  const legacy = makeProject();
+  delete legacy.numberGroups;
+  legacy.formatVersion = 2;
+  legacy.schema = 'storyweaver.project.v2';
+  const normalized = M.normalizeProject(legacy);
+  assert.equal(normalized.formatVersion, 3);
+  assert.deepEqual(normalized.numberGroups, []);
+  assert.ok(normalized.numberDefinitions.every(definition => definition.groupId === ''));
+}
+
+{
+  const p = makeProject();
   p.nodes.push(node('short-target', '短分支目标'));
   const branch = line('adaptive-line', p.rootId, 'short-target');
   branch.label = '短名称';
@@ -278,6 +391,116 @@ function valueOption(name, effects = []) {
   const longGap = longTarget.x - longSource.x - longSource.width;
   assert.ok(longGap > shortGap);
   assert.ok(longGap >= M.edgeLabelWidth(branch.label) + 56);
+}
+
+{
+  const p = makeProject();
+  p.viewSettings = {
+    notes: { enabled: true, position: 'top' },
+    branchColors: { enabled: false },
+    nodeOffsets: { [p.rootId]: { x: 70.4, y: -20.2 }, missing: { x: 9, y: 10 }, broken: { x: 'x', y: 2 } },
+    theme: { preset: 'custom', savedPresetId: 'theme-demo', colors: { canvas: '#123456', text: '#abcdef', branchPalette1: '#13579b', ignored: '#ffffff', panel: 'invalid' } }
+  };
+  const normalized = M.normalizeProject(p);
+  assert.deepEqual(normalized.viewSettings.notes, { enabled: true, position: 'top' });
+  assert.deepEqual(normalized.viewSettings.branchColors, { enabled: false });
+  assert.deepEqual(normalized.viewSettings.nodeOffsets, { [p.rootId]: { x: 70, y: -20 } });
+  assert.equal(normalized.viewSettings.theme.preset, 'custom');
+  assert.equal(normalized.viewSettings.theme.savedPresetId, 'theme-demo');
+  assert.deepEqual(normalized.viewSettings.theme.colors, { canvas: '#123456', text: '#ABCDEF', branchPalette1: '#13579B' });
+
+  delete p.viewSettings;
+  const legacy = M.normalizeProject(p);
+  assert.deepEqual(legacy.viewSettings, M.defaultViewSettings());
+}
+
+{
+  const p = makeProject();
+  p.nodes[0].notes = '跟随节点移动的备注';
+  p.viewSettings.notes = { enabled: true, position: 'right' };
+  const automatic = M.layoutGraph(p);
+  const automaticNode = automatic.positions.get(p.rootId);
+  const automaticNote = automatic.noteBoxes.get(p.rootId);
+  p.viewSettings.nodeOffsets = { [p.rootId]: { x: 180, y: 95 } };
+  const moved = M.layoutGraph(p);
+  const movedNode = moved.positions.get(p.rootId);
+  const movedNote = moved.noteBoxes.get(p.rootId);
+  assert.equal(movedNode.x - automaticNode.x, 180);
+  assert.equal(movedNode.y - automaticNode.y, 95);
+  assert.equal(movedNote.x - automaticNote.x, 180);
+  assert.equal(movedNote.y - automaticNote.y, 95);
+  assert.equal(moved.basePositions.get(p.rootId).x, automatic.basePositions.get(p.rootId).x);
+  assert.ok(moved.width > automatic.width);
+}
+
+{
+  const p = makeProject();
+  p.nodes[0].notes = '元节点旁边显示的画布备注';
+  p.viewSettings.notes = { enabled: true, position: 'top' };
+  const layout = M.layoutGraph(p);
+  const rootPosition = layout.positions.get(p.rootId);
+  const noteBox = layout.noteBoxes.get(p.rootId);
+  assert.ok(noteBox);
+  assert.equal(noteBox.position, 'top');
+  assert.ok(noteBox.y + noteBox.height < rootPosition.y);
+  assert.ok(layout.obstacles.some(item => item.type === 'note' && item.ownerId === p.rootId));
+}
+
+{
+  const p = makeProject();
+  p.nodes.push(node('route-a', 'A'), node('route-b', 'B'), node('route-c', 'C'));
+  p.branchLines.push(
+    line('route-root-a', p.rootId, 'route-a'),
+    line('route-root-b', p.rootId, 'route-b'),
+    line('route-root-c', p.rootId, 'route-c')
+  );
+  const layout = M.layoutGraph(p);
+  const routes = M.routeBranchLines(p, layout);
+  const startPorts = [...routes.values()].map(route => route.startY);
+  assert.equal(new Set(startPorts).size, 3);
+  assert.ok([...routes.values()].every(route => route.d.startsWith('M ') && route.points.length >= 2));
+}
+
+{
+  const p = makeProject();
+  p.nodes.push(node('color-a', 'A'), node('color-b', 'B'), node('color-shared', '共同目标'));
+  p.branchLines.push(
+    line('color-root-a', p.rootId, 'color-a'),
+    line('color-root-b', p.rootId, 'color-b'),
+    line('color-a-shared', 'color-a', 'color-shared'),
+    line('color-b-shared', 'color-b', 'color-shared')
+  );
+  const layout = M.layoutGraph(p);
+  const routes = M.routeBranchLines(p, layout);
+  const slots = M.assignBranchColorSlots(p, layout, routes, 8);
+  const rootOutboundSlots = p.branchLines.filter(branch => branch.sourceId === p.rootId).map(branch => slots.get(branch.sourceId));
+  assert.equal(rootOutboundSlots.length, 2);
+  assert.equal(new Set(rootOutboundSlots).size, 1);
+  assert.notEqual(slots.get('color-a'), slots.get('color-b'));
+  assert.ok([...slots.values()].every(slot => Number.isInteger(slot) && slot >= 0 && slot < 8));
+}
+
+{
+  const p = makeProject();
+  p.nodes.push(node('manual-target', '手动线路目标'));
+  const branch = line('manual-line', p.rootId, 'manual-target');
+  branch.route = { mode: 'manual', points: [{ x: 412, y: 137 }] };
+  p.branchLines.push(branch);
+  const layout = M.layoutGraph(p);
+  const geometry = M.routeBranchLines(p, layout).get(branch.id);
+  assert.deepEqual(geometry.seedPoints, [{ x: 412, y: 137 }]);
+  assert.ok(geometry.points.some(point => point.x === 412 && point.y === 137));
+
+  branch.route.points.push({ x: 'bad', y: 100 }, { x: -20, y: 200000 });
+  const normalized = M.normalizeProject(p);
+  assert.deepEqual(normalized.branchLines[0].route, {
+    mode: 'manual',
+    points: [{ x: 412, y: 137 }, { x: 0, y: 100000 }]
+  });
+  const exported = M.buildAiExport(normalized);
+  assert.equal(exported.viewSettings.theme.preset, 'midnight');
+  assert.equal(exported.branchLines[0].route.mode, 'manual');
+  assert.match(exported.aiReadingGuide.visualSettings, /不改变剧情方向/);
 }
 
 {
