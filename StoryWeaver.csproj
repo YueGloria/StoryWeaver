@@ -9,7 +9,7 @@
     <RootNamespace>StoryWeaver</RootNamespace>
     <Product>剧情脉络</Product>
     <Description>本地运行的文游剧情分支与数值逻辑编辑器</Description>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

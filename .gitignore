@@ -4,6 +4,7 @@ publish/
 artifacts/
 成品/
 剧情脉络-Windows-x64/
+StoryWeaver-Windows-x64/
 *.zip
 cache/
 *.storymap.json

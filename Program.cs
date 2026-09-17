@@ -124,7 +124,21 @@ internal sealed class LocalServer : IDisposable
 {
     private readonly TcpListener _listener;
     private readonly CancellationTokenSource _cancellation = new();
+    private readonly SemaphoreSlim _themePresetGate = new(1, 1);
     private Task? _acceptLoop;
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true
+    };
+    private static readonly HashSet<string> ThemeColorKeys = new(StringComparer.Ordinal)
+    {
+        "background", "panel", "surface", "canvas", "grid", "text", "muted", "accent",
+        "storyNode", "storyBorder", "rootNode", "rootBorder", "valueNode", "valueBorder",
+        "branchLine", "branchSelected", "noteBackground", "noteBorder", "noteText",
+        "branchPalette1", "branchPalette2", "branchPalette3", "branchPalette4",
+        "branchPalette5", "branchPalette6", "branchPalette7", "branchPalette8"
+    };
 
     public string Url { get; private set; } = string.Empty;
     public string CacheDirectory { get; }
@@ -197,6 +211,26 @@ internal sealed class LocalServer : IDisposable
                     return;
                 }
 
+                if (request.Method == "GET" && request.Path == "/api/theme-presets")
+                {
+                    await WriteJsonAsync(stream, await GetThemePresetsJsonAsync(), 200);
+                    return;
+                }
+
+                if (request.Method == "POST" && request.Path == "/api/theme-presets/save")
+                {
+                    var preset = await SaveThemePresetAsync(request.Body);
+                    await WriteJsonAsync(stream, JsonSerializer.Serialize(preset, JsonOptions), 200);
+                    return;
+                }
+
+                if (request.Method == "POST" && request.Path == "/api/theme-presets/delete")
+                {
+                    await DeleteThemePresetAsync(request.Body);
+                    await WriteJsonAsync(stream, "{\"ok\":true}", 200);
+                    return;
+                }
+
                 if (request.Method == "GET")
                 {
                     var resourcePath = request.Path is "/" or "/index.html"
@@ -214,6 +248,17 @@ internal sealed class LocalServer : IDisposable
                 }
 
                 await WriteTextAsync(stream, "Not found", "text/plain; charset=utf-8", 404);
+            }
+            catch (InvalidDataException exception)
+            {
+                try
+                {
+                    await WriteTextAsync(stream, exception.Message, "text/plain; charset=utf-8", 400);
+                }
+                catch
+                {
+                    // The browser may have already closed the connection.
+                }
             }
             catch (Exception exception)
             {
@@ -256,6 +301,126 @@ internal sealed class LocalServer : IDisposable
         }
     }
 
+    private string ThemePresetsPath => Path.Combine(CacheDirectory, "theme-presets.json");
+
+    private async Task<string> GetThemePresetsJsonAsync()
+    {
+        await _themePresetGate.WaitAsync(_cancellation.Token);
+        try
+        {
+            return JsonSerializer.Serialize(await ReadThemePresetsAsync(), JsonOptions);
+        }
+        finally
+        {
+            _themePresetGate.Release();
+        }
+    }
+
+    private async Task<List<ThemePresetData>> ReadThemePresetsAsync()
+    {
+        if (!File.Exists(ThemePresetsPath)) return [];
+        var json = await File.ReadAllTextAsync(ThemePresetsPath, Encoding.UTF8, _cancellation.Token);
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            return JsonSerializer.Deserialize<List<ThemePresetData>>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            }) ?? [];
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException("主题方案缓存文件无法解析，请检查 cache/theme-presets.json。", exception);
+        }
+    }
+
+    private async Task WriteThemePresetsAsync(List<ThemePresetData> presets)
+    {
+        var temporaryPath = ThemePresetsPath + ".tmp";
+        var json = JsonSerializer.Serialize(presets, JsonOptions);
+        await File.WriteAllTextAsync(temporaryPath, json, new UTF8Encoding(false), _cancellation.Token);
+        File.Move(temporaryPath, ThemePresetsPath, true);
+    }
+
+    private static bool IsHexColor(string? value) => value is { Length: 7 }
+        && value[0] == '#'
+        && value.Skip(1).All(character => Uri.IsHexDigit(character));
+
+    private static (string Id, string Name, Dictionary<string, string> Colors) ParseThemePresetRequest(byte[] body)
+    {
+        if (body.Length == 0 || body.Length > 128 * 1024)
+            throw new InvalidDataException("主题方案内容为空或过大。");
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        var id = root.TryGetProperty("id", out var idElement) ? idElement.GetString()?.Trim() ?? string.Empty : string.Empty;
+        var name = root.TryGetProperty("name", out var nameElement) ? nameElement.GetString()?.Trim() ?? string.Empty : string.Empty;
+        if (name.Length is < 1 or > 40) throw new InvalidDataException("主题方案名称需为 1～40 个字符。");
+        if (!root.TryGetProperty("colors", out var colorsElement) || colorsElement.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("主题方案缺少颜色数据。");
+        var colors = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var property in colorsElement.EnumerateObject())
+        {
+            var value = property.Value.GetString();
+            if (!ThemeColorKeys.Contains(property.Name) || !IsHexColor(value)) continue;
+            colors[property.Name] = value!.ToUpperInvariant();
+        }
+        if (colors.Count != ThemeColorKeys.Count) throw new InvalidDataException("主题方案颜色数据不完整或格式无效。");
+        return (id, name, colors);
+    }
+
+    private async Task<ThemePresetData> SaveThemePresetAsync(byte[] body)
+    {
+        var request = ParseThemePresetRequest(body);
+        await _themePresetGate.WaitAsync(_cancellation.Token);
+        try
+        {
+            var presets = await ReadThemePresetsAsync();
+            var duplicate = presets.FirstOrDefault(item => item.Name.Equals(request.Name, StringComparison.CurrentCultureIgnoreCase)
+                && !item.Id.Equals(request.Id, StringComparison.Ordinal));
+            if (duplicate is not null) throw new InvalidDataException("已经存在同名主题方案。");
+            ThemePresetData saved;
+            if (string.IsNullOrEmpty(request.Id))
+            {
+                if (presets.Count >= 50) throw new InvalidDataException("最多可保存 50 个自定义主题方案。");
+                saved = new ThemePresetData($"theme-{Guid.NewGuid():N}", request.Name, request.Colors);
+                presets.Add(saved);
+            }
+            else
+            {
+                var index = presets.FindIndex(item => item.Id.Equals(request.Id, StringComparison.Ordinal));
+                if (index < 0) throw new InvalidDataException("要更新的主题方案不存在。");
+                saved = new ThemePresetData(request.Id, request.Name, request.Colors);
+                presets[index] = saved;
+            }
+            await WriteThemePresetsAsync(presets);
+            return saved;
+        }
+        finally
+        {
+            _themePresetGate.Release();
+        }
+    }
+
+    private async Task DeleteThemePresetAsync(byte[] body)
+    {
+        if (body.Length == 0 || body.Length > 16 * 1024) throw new InvalidDataException("删除请求无效。");
+        using var document = JsonDocument.Parse(body);
+        var id = document.RootElement.TryGetProperty("id", out var idElement) ? idElement.GetString()?.Trim() ?? string.Empty : string.Empty;
+        if (string.IsNullOrEmpty(id)) throw new InvalidDataException("删除请求缺少主题方案编号。");
+        await _themePresetGate.WaitAsync(_cancellation.Token);
+        try
+        {
+            var presets = await ReadThemePresetsAsync();
+            var removed = presets.RemoveAll(item => item.Id.Equals(id, StringComparison.Ordinal));
+            if (removed == 0) throw new InvalidDataException("要删除的主题方案不存在。");
+            await WriteThemePresetsAsync(presets);
+        }
+        finally
+        {
+            _themePresetGate.Release();
+        }
+    }
+
     private static async Task WriteResourceAsync(NetworkStream stream, string fileName)
     {
         var assembly = Assembly.GetExecutingAssembly();
@@ -283,6 +448,7 @@ internal sealed class LocalServer : IDisposable
         var statusText = statusCode switch
         {
             200 => "OK",
+            400 => "Bad Request",
             404 => "Not Found",
             _ => "Internal Server Error"
         };
@@ -302,8 +468,11 @@ internal sealed class LocalServer : IDisposable
         _listener.Stop();
         try { _acceptLoop?.Wait(TimeSpan.FromSeconds(2)); } catch { }
         _cancellation.Dispose();
+        _themePresetGate.Dispose();
     }
 }
+
+internal sealed record ThemePresetData(string Id, string Name, Dictionary<string, string> Colors);
 
 internal sealed record HttpRequestData(string Method, string Path, byte[] Body)
 {
