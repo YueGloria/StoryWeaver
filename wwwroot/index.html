@@ -42,9 +42,24 @@
       <div class="tool-group">
         <button type="button" class="tool-button" id="merge-tool" aria-pressed="false"><span aria-hidden="true">⋔</span> 收束</button>
         <button type="button" class="tool-button" id="connect-tool" aria-pressed="false"><span aria-hidden="true">↗</span> 连线</button>
+        <button type="button" class="tool-button" id="insert-story-node" disabled title="请先选中一条分支线"><span aria-hidden="true">□</span> 插入剧情节点</button>
         <button type="button" class="tool-button" id="insert-value-node" disabled title="请先选中一条分支线"><span aria-hidden="true">◇</span> 插入数值节点</button>
         <span class="tool-divider" aria-hidden="true"></span>
         <button type="button" class="tool-button" id="fit-view"><span aria-hidden="true">⊡</span> 适应画布</button>
+        <button type="button" class="tool-button" id="node-move-tool" aria-pressed="false"><span aria-hidden="true">✥</span> 手动移动节点</button>
+        <button type="button" class="tool-button" id="reset-node-positions" disabled><span aria-hidden="true">↺</span> 重置节点位置</button>
+        <span class="tool-divider" aria-hidden="true"></span>
+        <button type="button" class="tool-button" id="notes-toggle" aria-pressed="false"><span aria-hidden="true">▤</span> 显示备注</button>
+        <label class="note-position-control" title="统一设置备注显示方向">
+          <span class="sr-only">备注位置</span>
+          <select id="notes-position" aria-label="备注位置" disabled>
+            <option value="top">上方</option>
+            <option value="right">右侧</option>
+            <option value="bottom">下方</option>
+            <option value="left">左侧</option>
+          </select>
+        </label>
+        <button type="button" class="tool-button" id="theme-tool" aria-expanded="false"><span aria-hidden="true">◐</span> 主题</button>
       </div>
       <div class="selection-summary" id="selection-summary">已选择元节点</div>
     </nav>
@@ -59,7 +74,7 @@
           <strong>从元节点开始建立剧情</strong>
           <span>点击元节点右侧的加号创建第一个子节点</span>
         </div>
-        <div class="canvas-hint">拖拽空白处移动 · 滚轮缩放 · 双击节点名称快速编辑</div>
+        <div class="canvas-hint">拖拽空白处移动 · 滚轮缩放 · 开启“手动移动节点”后可拖动节点</div>
         <div class="zoom-controls" aria-label="缩放控制">
           <button type="button" id="zoom-out" aria-label="缩小">−</button>
           <button type="button" id="zoom-label" class="zoom-label" title="点击恢复 100%">100%</button>
@@ -68,6 +83,8 @@
       </div>
       <aside id="sidebar" class="sidebar" aria-live="polite"></aside>
     </section>
+
+    <section id="theme-panel" class="theme-panel" aria-label="主题与颜色" hidden></section>
 
     <button type="button" class="route-check" id="route-check"><span aria-hidden="true">✓</span> 检查通路</button>
 
